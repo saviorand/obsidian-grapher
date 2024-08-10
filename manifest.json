@@ -1,11 +1,10 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
+	"id": "obsidian-grapher",
+	"name": "Grapher",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "Parse any unstructured text or file into a knowledge graph with Prolog and LLMs",
+	"author": "Valentin Erokhin",
+	"authorUrl": "https://valentin.wiki",
 	"isDesktopOnly": false
 }
