@@ -1,27 +1,42 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile } from 'obsidian';
-import { spawn } from 'child_process';
+import OpenAI from "openai";
 import * as fs from 'fs';
 import * as path from 'path';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { LLMClient, callClaudeApi, callGptApi } from './src/llm';
+import { chunkText } from "src/chunking";
+import { defaultOntology, arityTwoPrompt } from './src/prompts';
+import { createFoldersAndFiles, parseProlog } from './src/prolog_to_folder';
+import { fileToText } from './src/file_to_text';
 
-interface GrapherSettings {
-	pythonPath: string;
-	openAiKey: string;
-	anthropicKey: string;
+enum llmEngine {
+	OPENAI = 'openai',
+	ANTHROPIC = 'anthropic'
 }
 
+interface GrapherSettings {
+	llmEngine: llmEngine;
+	modelName: string;
+	ontology: string;
+	openAiKey: string;
+	anthropicKey: string;
+	chunkSize: number;
+}
+
+const DEFAULT_ANTHROPIC_MODEL_NAME = "claude-3-5-sonnet-20240620";
+const DEFAULT_OPEN_AI_MODEL_NAME = "gpt-4o-mini";
+
 const DEFAULT_SETTINGS: GrapherSettings = {
-	pythonPath: '/usr/bin/python3',
+	llmEngine: llmEngine.ANTHROPIC,
+	modelName: DEFAULT_ANTHROPIC_MODEL_NAME,
+	ontology: '',
 	openAiKey: '',
-	anthropicKey: ''
+	anthropicKey: '',
+	chunkSize: 2000
 }
 
 export default class Grapher extends Plugin {
 	settings: GrapherSettings;
 	basePath = (this.app.vault.adapter as any).basePath;
-	scriptBasePath =  `${this.basePath}/${this.app.vault.configDir}/plugins/obsidian-grapher/src`;
-	scriptFileToTextPath = `${this.scriptBasePath}/file_to_text.py`;
-	scriptTextToPrologPath = `${this.scriptBasePath}/text_to_prolog.py`;
-	scriptPrologToFolderPath = `${this.scriptBasePath}/prolog_to_folder.py`;
 
 	async onload() {
 	  	await this.loadSettings();
@@ -73,16 +88,33 @@ export default class Grapher extends Plugin {
 	}
 
 	private checkAPIKeys() {
-		if (this.settings.openAiKey === '') {
-			this.showNotice('OpenAI API key is not set. Please set it in the plugin settings.');
+		if (this.settings.llmEngine === llmEngine.OPENAI && this.settings.openAiKey === '') {
+			this.showNotice('Please enter your OpenAI API key in the settings.');
 			return false;
 		}
-		if (this.settings.anthropicKey === '') {
-			this.showNotice('Anthropic API key is not set. Please set it in the plugin settings.');
+		if (this.settings.llmEngine === llmEngine.ANTHROPIC && this.settings.anthropicKey === '') {
+			this.showNotice('Please enter your Anthropic API key in the settings.');
 			return false;
 		}
 		return true;
 	};
+
+	private initializeLLMClient() {
+		let llmClient: LLMClient;
+		if (this.settings.llmEngine === llmEngine.OPENAI) {
+			if (this.settings.modelName === DEFAULT_ANTHROPIC_MODEL_NAME) {
+				this.settings.modelName = DEFAULT_OPEN_AI_MODEL_NAME
+			}
+			return llmClient = new OpenAI({
+				apiKey: this.settings.openAiKey,
+				dangerouslyAllowBrowser: true
+			});
+		} else if (this.settings.llmEngine === llmEngine.ANTHROPIC) {
+			console.info('Using the Anthropic API directly');
+		} else {
+			this.showNotice("Could not initialize LLM Client, unknown LLM type")
+		}
+	}
 
 	private createGeneratedFolders(generatedBasePath: string) {
 		const generatedDir = generatedBasePath + '/generated/';
@@ -91,7 +123,62 @@ export default class Grapher extends Plugin {
 
 		return {folderOutputPath, generatedDir};
 	}
-	  
+
+	async textToProlog(text: string, prologOutputPath: string): Promise<void> {
+		if (text.length === 0) {
+			this.showNotice('The text is empty');
+		}
+		const chunks = chunkText(text, this.settings.chunkSize);
+		return await this.textChunksToPrologRelations(chunks, prologOutputPath);
+	}
+
+	async prologToFolder(filePath: string, folderOutputPath: string) {	
+		const [arity1Predicates, arity2Predicates] = parseProlog(filePath);
+		createFoldersAndFiles(arity1Predicates, arity2Predicates, folderOutputPath);
+	}
+
+	cleanGPTPrologCodeBlocks(text: string) {
+		return text.replace(/```prolog/g, '').replace(/```/g, '');
+	};
+
+	async textChunksToPrologRelations(textChunks: string[], prologOutputPath: string) {
+		const llmClient = this.initializeLLMClient();
+
+		try {
+			for (let i = 0; i < textChunks.length; i++) {
+				const chunk = textChunks[i];
+				let chunkPrologRelations = null;
+				if (this.settings.llmEngine === llmEngine.OPENAI) {
+					try	{
+						chunkPrologRelations = await callGptApi(llmClient as OpenAI, this.settings.modelName, chunk, arityTwoPrompt(this.settings.ontology));
+						if (chunkPrologRelations === null || chunkPrologRelations === '') {
+							throw new Error('Empty response from OpenAI');
+						}
+						chunkPrologRelations = this.cleanGPTPrologCodeBlocks(chunkPrologRelations);
+					} catch (error) {
+						this.showNotice('An error occurred during entity extraction: ' + error);
+					}
+				} else if (this.settings.llmEngine === llmEngine.ANTHROPIC) {
+					try {
+						chunkPrologRelations = await callClaudeApi(this.settings.anthropicKey, this.settings.modelName, chunk, arityTwoPrompt(this.settings.ontology));
+						if (chunkPrologRelations === null || chunkPrologRelations === '') {
+							throw new Error('Empty response from Anthropic');
+						}
+					  } catch (error) {
+						console.error('An error occurred during entity extraction:', error);
+						this.showNotice('An error occurred during entity extraction: ' + error);
+						fs.appendFileSync(prologOutputPath, `Error: ${error}\n`);
+					  }
+					}
+				if (chunkPrologRelations) {
+				fs.appendFileSync(prologOutputPath, chunkPrologRelations);
+				}
+			}
+		} catch (error) {
+			this.showNotice('An error occurred during entity extraction: ' + error);
+		}
+	}
+
 	async generateGraphFromText(text: string, filePath: string) {
 		this.showNotice('Processing your text...');
 
@@ -111,11 +198,11 @@ export default class Grapher extends Plugin {
 
 		try {
 			if (prologOutputPath) {
-			  await this.spawnPythonProcessAsync(this.scriptTextToPrologPath, textOutputPath, prologOutputPath);
+			  await this.textToProlog(text, prologOutputPath);
 			  this.showNotice('Text to Prolog conversion completed');
 			}
 			if (prologOutputPath && folderOutputPath) {
-			  await this.spawnPythonProcessAsync(this.scriptPrologToFolderPath, prologOutputPath, folderOutputPath);
+			  await this.prologToFolder(prologOutputPath, folderOutputPath);
 			  this.showNotice('Prolog to Folder conversion completed');
 			}
 			this.showNotice('Your graph is ready!');
@@ -138,15 +225,17 @@ export default class Grapher extends Plugin {
 	  
 		try {
 		  if (textOutputPath) {
-			await this.spawnPythonProcessAsync(this.scriptFileToTextPath, fullFilePath, textOutputPath);
+			const text = await fileToText(fullFilePath);
+			fs.writeFileSync(textOutputPath, text);
 			this.showNotice('File to Text conversion completed');
 		  }
 		  if (prologOutputPath) {
-			await this.spawnPythonProcessAsync(this.scriptTextToPrologPath, textOutputPath, prologOutputPath);
+			const textContent = fs.readFileSync(textOutputPath, 'utf8')
+			await this.textToProlog(textContent, prologOutputPath);
 			this.showNotice('Text to Prolog conversion completed');
 		  }
 		  if (folderOutputPath) {
-			await this.spawnPythonProcessAsync(this.scriptPrologToFolderPath, prologOutputPath, folderOutputPath);
+			await this.prologToFolder(prologOutputPath, folderOutputPath);
 			this.showNotice('Prolog to Folder conversion completed');
 		  }
 		  this.showNotice('Your graph is ready!');
@@ -155,34 +244,8 @@ export default class Grapher extends Plugin {
 		}
 	  }
 	  
-	  private spawnPythonProcessAsync(scriptPath: string, inputPath: string, outputPath: string): Promise<void> {
-		return new Promise((resolve, reject) => {
-		  
-		  const pythonPath = this.settings.pythonPath;
-		  if (pythonPath === '' || !fs.existsSync(pythonPath)) {
-			reject(new Error(`Python executable not found at ${pythonPath}`));
-		  }
-		  const process = spawn(pythonPath, [scriptPath, inputPath, outputPath]);
-	  
-		  process.on('close', (code) => {
-			if (code === 0) {
-			  resolve();
-			} else {
-			  reject(new Error(`Python process exited with code ${code}`));
-			}
-		  });
-	  
-		  process.on('error', (err) => {
-			reject(err);
-		  });
-
-		  process.stdout.on('data', (data) => {
-			this.showNotice(`${data}`);
-		  });
-		});
-	  }
-
 	  private showNotice(message: string) {
+		console.log(message);
 		new Notice(message);
 	  }
 	  
@@ -191,22 +254,14 @@ export default class Grapher extends Plugin {
 
 	}
 
-	private async saveKeysToEnvFile() {
-		const envPath = `${this.scriptBasePath}/.env`;
-		fs.writeFileSync(envPath, `OPENAI_API_KEY=${this.settings.openAiKey}\nANTHROPIC_API_KEY=${this.settings.anthropicKey}`);
-	};
-
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-		await this.saveKeysToEnvFile();
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-		await this.saveKeysToEnvFile();
 	}
 }
-
 
 class TextInputModal extends Modal {
 	result: string;
@@ -239,13 +294,13 @@ class TextInputModal extends Modal {
 			  this.onSubmit(this.result);
 			}));
 		
-		// button should be activated with enter key - dangerous? is eventlistener ever removed?
-		document.addEventListener('keydown', (event) => {
-			if (event.key === 'Enter') {
-				this.close();
-				this.onSubmit(this.result);
-			}
-		});
+		// TODO: button should be activated with enter key - dangerous? is eventlistener ever removed?
+		// document.addEventListener('keydown', (event) => {
+		// 	if (event.key === 'Enter') {
+		// 		this.close();
+		// 		this.onSubmit(this.result);
+		// 	}
+		// });
 	}
   
 	onClose() {
@@ -269,35 +324,71 @@ class BasicSettingsTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Python Path')
-			.setDesc('Path to the Python executable on your system')
-			.addText(text => text
-				.setPlaceholder('/usr/bin/python3')
-				.setValue(this.plugin.settings.pythonPath)
+			.setName('LLM Engine')
+			.setDesc('Choose the language model engine to use')
+			.addDropdown(dropdown => dropdown
+				.addOptions({
+					[llmEngine.OPENAI]: 'OpenAI',
+					[llmEngine.ANTHROPIC]: 'Anthropic'
+				})
+				.setValue(this.plugin.settings.llmEngine)
 				.onChange(async (value) => {
-					this.plugin.settings.pythonPath = value;
-					await this.plugin.saveSettings();
-				}));
-		
-		new Setting(containerEl)
-			.setName('OpenAI API Key')
-			.setDesc('API key for OpenAI')
-			.addText(text => text
-				.setPlaceholder('sk-...')
-				.setValue(this.plugin.settings.openAiKey)
-				.onChange(async (value) => {
-					this.plugin.settings.openAiKey = value;
+					this.plugin.settings.llmEngine = value as llmEngine;
 					await this.plugin.saveSettings();
 				}));
 			
 		new Setting(containerEl)
-			.setName('Anthropic API Key')
-			.setDesc('API key for Anthropic')
+			.setName('LLM Model')
+			.setDesc('Model of the LLM to use')
 			.addText(text => text
-				.setPlaceholder('sk-...')
-				.setValue(this.plugin.settings.anthropicKey)
+				.setPlaceholder(DEFAULT_ANTHROPIC_MODEL_NAME)
+				.setValue(this.plugin.settings.modelName)
 				.onChange(async (value) => {
-					this.plugin.settings.anthropicKey = value;
+					this.plugin.settings.modelName = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Ontology')
+			.setDesc('Entities and relations ontology in free text format (can be a list)')
+			.addTextArea(text => text
+				.setPlaceholder(defaultOntology)
+				.setValue(this.plugin.settings.ontology)
+				.onChange(async (value) => {
+					this.plugin.settings.ontology = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+		.setName('OpenAI API Key')
+		.setDesc('API key for OpenAI')
+		.addText(text => text
+			.setPlaceholder('sk-...')
+			.setValue(this.plugin.settings.openAiKey)
+			.onChange(async (value) => {
+				this.plugin.settings.openAiKey = value;
+				await this.plugin.saveSettings();
+			}));
+
+		new Setting(containerEl)
+		.setName('Anthropic API Key')
+		.setDesc('API key for Anthropic')
+		.addText(text => text
+			.setPlaceholder('sk-...')
+			.setValue(this.plugin.settings.anthropicKey)
+			.onChange(async (value) => {
+				this.plugin.settings.anthropicKey = value;
+				await this.plugin.saveSettings();
+			}));
+
+		new Setting(containerEl)
+			.setName('Chunk Size')
+			.setDesc('Size of the text chunks to send to the LLM')
+			.addText(text => text
+				.setPlaceholder('2000')
+				.setValue(this.plugin.settings.chunkSize.toString())
+				.onChange(async (value) => {
+					this.plugin.settings.chunkSize = parseInt(value);
 					await this.plugin.saveSettings();
 				}));
 	}

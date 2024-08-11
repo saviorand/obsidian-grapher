@@ -20,5 +20,13 @@
 		"obsidian": "latest",
 		"tslib": "2.4.0",
 		"typescript": "4.7.4"
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^0.25.1",
+		"htmlparser2": "^9.1.0",
+		"node-fetch": "^3.3.2",
+		"officeparser": "^4.1.1",
+		"openai": "^4.55.4",
+		"pdfreader": "^3.0.4"
 	}
 }
