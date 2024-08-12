@@ -7,6 +7,7 @@ import { chunkText } from "src/chunking";
 import { defaultOntology, arityTwoPrompt } from './src/prompts';
 import { createFoldersAndFiles, parseProlog } from './src/prolog_to_folder';
 import { fileToText } from './src/file_to_text';
+import { ontologyContainerStyles } from './src/styles/styles';
 
 enum llmEngine {
 	OPENAI = 'openai',
@@ -17,6 +18,8 @@ interface GrapherSettings {
 	llmEngine: llmEngine;
 	modelName: string;
 	ontology: string;
+	parentRelations: string;
+	childRelations: string;
 	openAiKey: string;
 	anthropicKey: string;
 	chunkSize: number;
@@ -29,6 +32,8 @@ const DEFAULT_SETTINGS: GrapherSettings = {
 	llmEngine: llmEngine.ANTHROPIC,
 	modelName: DEFAULT_ANTHROPIC_MODEL_NAME,
 	ontology: '',
+	parentRelations: 'has part',
+	childRelations: 'part of',
 	openAiKey: '',
 	anthropicKey: '',
 	chunkSize: 2000
@@ -134,7 +139,7 @@ export default class Grapher extends Plugin {
 
 	async prologToFolder(filePath: string, folderOutputPath: string) {	
 		const [arity1Predicates, arity2Predicates] = parseProlog(filePath);
-		createFoldersAndFiles(arity1Predicates, arity2Predicates, folderOutputPath);
+		createFoldersAndFiles(arity1Predicates, arity2Predicates, folderOutputPath, this.settings.parentRelations, this.settings.childRelations);
 	}
 
 	cleanGPTPrologCodeBlocks(text: string) {
@@ -320,9 +325,12 @@ class BasicSettingsTab extends PluginSettingTab {
 
 	display(): void {
 		const {containerEl} = this;
-
 		containerEl.empty();
 
+		containerEl.createEl('h2', {text: 'Grapher Settings'});
+		containerEl.createEl('p', {text: 'Configure the settings for the Grapher plugin.'});
+		
+		containerEl.createEl('h3', {text: 'LLM Settings'});
 		new Setting(containerEl)
 			.setName('LLM Engine')
 			.setDesc('Choose the language model engine to use')
@@ -347,18 +355,61 @@ class BasicSettingsTab extends PluginSettingTab {
 					this.plugin.settings.modelName = value;
 					await this.plugin.saveSettings();
 				}));
-
+		
 		new Setting(containerEl)
-			.setName('Ontology')
-			.setDesc('Entities and relations ontology in free text format (can be a list)')
-			.addTextArea(text => text
-				.setPlaceholder(defaultOntology)
-				.setValue(this.plugin.settings.ontology)
+			.setName('Chunk Size')
+			.setDesc('Size of the text chunks to send to the LLM')
+			.addText(text => text
+				.setPlaceholder('2000')
+				.setValue(this.plugin.settings.chunkSize.toString())
 				.onChange(async (value) => {
-					this.plugin.settings.ontology = value;
+					this.plugin.settings.chunkSize = parseInt(value);
 					await this.plugin.saveSettings();
 				}));
+		
+		containerEl.createEl('h3', {text: 'Ontology'});
+		const ontologyContainer = containerEl.createDiv({cls: 'ontology-container'});
+		ontologyContainer.createEl('style', {
+			text: ontologyContainerStyles
+		});
 
+		const titleDescContainer = ontologyContainer.createDiv({cls: 'title-desc-container'});
+		titleDescContainer.createSpan({text: 'Ontology', cls: 'setting-item-name'});
+		titleDescContainer.createSpan({text: 'Entities and relations ontology in free text format (can be a list)', cls: 'setting-item-description'});
+
+		new Setting(ontologyContainer)
+		.addTextArea(text => text
+			.setPlaceholder(defaultOntology)
+			.setValue(this.plugin.settings.ontology)
+			.onChange(async (value) => {
+				this.plugin.settings.ontology = value;
+				await this.plugin.saveSettings();
+			}));
+		
+		new Setting(containerEl)
+			.setName('Parent Relations')
+			.setDesc('Parent relations')
+			.addText(text => text
+				.setPlaceholder('has part')
+				.setValue(this.plugin.settings.parentRelations)
+				.onChange(async (value) => {
+					this.plugin.settings.parentRelations = value;
+					await this.plugin.saveSettings();
+				}));
+		
+		new Setting(containerEl)
+			.setName('Child Relations')
+			.setDesc('Child relations')
+			.addText(text => text
+				.setPlaceholder('part of')
+				.setValue(this.plugin.settings.childRelations)
+				.onChange(async (value) => {
+					this.plugin.settings.childRelations = value;
+					await this.plugin.saveSettings();
+				}));
+		
+		containerEl.createEl('h3', {text: 'API Keys'});
+		
 		new Setting(containerEl)
 		.setName('OpenAI API Key')
 		.setDesc('API key for OpenAI')
@@ -380,16 +431,5 @@ class BasicSettingsTab extends PluginSettingTab {
 				this.plugin.settings.anthropicKey = value;
 				await this.plugin.saveSettings();
 			}));
-
-		new Setting(containerEl)
-			.setName('Chunk Size')
-			.setDesc('Size of the text chunks to send to the LLM')
-			.addText(text => text
-				.setPlaceholder('2000')
-				.setValue(this.plugin.settings.chunkSize.toString())
-				.onChange(async (value) => {
-					this.plugin.settings.chunkSize = parseInt(value);
-					await this.plugin.saveSettings();
-				}));
 	}
 }

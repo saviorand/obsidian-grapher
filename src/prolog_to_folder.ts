@@ -10,11 +10,12 @@ type Arity2Predicate = [string, string, string];
 function createFoldersAndFiles(
     arity1Predicates: Arity1Predicates,
     arity2Predicates: Arity2Predicate[],
-    outputDir: string
+    outputDir: string,
+    parentRelations: string,
+    childRelations: string
 ): void {
     fs.mkdirSync(outputDir, { recursive: true });
 
-    // Create folders and files for arity 1 predicates
     for (const [predicate, parameters] of Object.entries(arity1Predicates)) {
         const predicateDir = path.join(outputDir, predicate);
         fs.mkdirSync(predicateDir, { recursive: true });

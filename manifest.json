@@ -3,7 +3,7 @@
 	"name": "Grapher",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
-	"description": "Parse any unstructured text or file into a knowledge graph with Prolog and LLMs",
+	"description": "Parse unstructured text and files into a knowledge graph with Prolog and LLMs",
 	"author": "Valentin Erokhin",
 	"authorUrl": "https://valentin.wiki",
 	"isDesktopOnly": false
