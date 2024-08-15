@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawn } from 'child_process';
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import { LLMClient, callClaudeApi, callGptApi } from './src/llm';
 import { chunkText } from "src/chunking";
@@ -14,6 +15,11 @@ enum llmEngine {
 	ANTHROPIC = 'anthropic'
 }
 
+enum parserEngine {
+	DEFAULT = 'default',
+	UNSTRUCTURED = 'unstructured'
+}
+
 interface GrapherSettings {
 	llmEngine: llmEngine;
 	modelName: string;
@@ -23,6 +29,8 @@ interface GrapherSettings {
 	openAiKey: string;
 	anthropicKey: string;
 	chunkSize: number;
+	parserEngine: parserEngine;
+	pythonPath: string;
 }
 
 const DEFAULT_ANTHROPIC_MODEL_NAME = "claude-3-5-sonnet-20240620";
@@ -36,12 +44,16 @@ const DEFAULT_SETTINGS: GrapherSettings = {
 	childRelations: 'part of',
 	openAiKey: '',
 	anthropicKey: '',
-	chunkSize: 2000
+	chunkSize: 2000,
+	parserEngine: parserEngine.DEFAULT,
+	pythonPath: '/usr/bin/python3'
 }
 
 export default class Grapher extends Plugin {
 	settings: GrapherSettings;
 	basePath = (this.app.vault.adapter as any).basePath;
+	pythonScriptsBasePath =  `${this.basePath}/${this.app.vault.configDir}/plugins/obsidian-grapher/src/python`;
+	pythonScriptFileToTextPath = `${this.pythonScriptsBasePath}/file_to_text.py`;
 
 	async onload() {
 	  	await this.loadSettings();
@@ -231,8 +243,12 @@ export default class Grapher extends Plugin {
 	  
 		try {
 		  if (textOutputPath) {
-			const text = await fileToText(fullFilePath);
-			fs.writeFileSync(textOutputPath, text);
+			if (this.settings.parserEngine === parserEngine.DEFAULT) {
+			  const text = await fileToText(fullFilePath);
+			  fs.writeFileSync(textOutputPath, text);
+			} else if (this.settings.parserEngine === parserEngine.UNSTRUCTURED) {
+			  await this.spawnPythonProcessAsync(this.pythonScriptFileToTextPath, fullFilePath, textOutputPath);
+			}	
 			this.showNotice('File to Text conversion completed');
 		  }
 		  if (prologOutputPath) {
@@ -255,7 +271,33 @@ export default class Grapher extends Plugin {
 		new Notice(message);
 	  }
 	  
+	  private spawnPythonProcessAsync(scriptPath: string, inputPath: string, outputPath: string): Promise<void> {
+		return new Promise((resolve, reject) => {
 
+		  const pythonPath = this.settings.pythonPath;
+		  if (pythonPath === '' || !fs.existsSync(pythonPath)) {
+			reject(new Error(`Python executable not found at ${pythonPath}`));
+		  }
+		  const process = spawn(pythonPath, [scriptPath, inputPath, outputPath]);
+
+		  process.on('close', (code) => {
+			if (code === 0) {
+			  resolve();
+			} else {
+			  reject(new Error(`Python process exited with code ${code}`));
+			}
+		  });
+
+		  process.on('error', (err) => {
+			reject(err);
+		  });
+
+		  process.stdout.on('data', (data) => {
+			this.showNotice(`${data}`);
+		  });
+		});
+	  }
+	
 	onunload() {
 
 	}
@@ -432,5 +474,31 @@ class BasicSettingsTab extends PluginSettingTab {
 				this.plugin.settings.anthropicKey = value;
 				await this.plugin.saveSettings();
 			}));
+
+		containerEl.createEl('h3', {text: 'Parser Settings'});
+		new Setting(containerEl)
+			.setName('Parser Engine')
+			.setDesc('Choose the parsing method to use to extract PDFs and other files to text before processing')
+			.addDropdown(dropdown => dropdown
+				.addOptions({
+					[parserEngine.DEFAULT]: 'Default',
+					[parserEngine.UNSTRUCTURED]: 'Unstructured'
+				})
+				.setValue(this.plugin.settings.parserEngine)
+				.onChange(async (value) => {
+					this.plugin.settings.parserEngine = value as parserEngine;
+					await this.plugin.saveSettings();
+				}));
+		
+		new Setting(containerEl)
+			.setName('Python Path')
+			.setDesc('Path to the Python executable')
+			.addText(text => text
+				.setPlaceholder('/usr/bin/python3')
+				.setValue(this.plugin.settings.pythonPath)
+				.onChange(async (value) => {
+					this.plugin.settings.pythonPath = value;
+					await this.plugin.saveSettings();
+				}));
 	}
 }
