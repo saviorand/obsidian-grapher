@@ -122,8 +122,8 @@ export default class Grapher extends Plugin {
 	}
 
 	private createGeneratedFolders(generatedBasePath: string) {
+		const folderOutputPath = generatedBasePath;
 		const generatedDir = generatedBasePath + '/generated/';
-		const folderOutputPath = generatedBasePath + '/graph/';
 		fs.mkdirSync(generatedDir, { recursive: true });
 
 		return {folderOutputPath, generatedDir};
@@ -139,7 +139,7 @@ export default class Grapher extends Plugin {
 
 	async prologToFolder(filePath: string, folderOutputPath: string) {	
 		const [arity1Predicates, arity2Predicates] = parseProlog(filePath);
-		createFoldersAndFiles(arity1Predicates, arity2Predicates, folderOutputPath, this.settings.parentRelations, this.settings.childRelations);
+		createFoldersAndFiles(arity2Predicates, folderOutputPath, this.settings.parentRelations, this.settings.childRelations);
 	}
 
 	cleanGPTPrologCodeBlocks(text: string) {
@@ -151,6 +151,7 @@ export default class Grapher extends Plugin {
 
 		try {
 			for (let i = 0; i < textChunks.length; i++) {
+				this.showNotice(`Processing chunk ${i + 1} of ${textChunks.length}`);
 				const chunk = textChunks[i];
 				let chunkPrologRelations = null;
 				if (this.settings.llmEngine === llmEngine.OPENAI) {
@@ -218,7 +219,7 @@ export default class Grapher extends Plugin {
 
 	async generateGraphFromFile(filePath: string) {
 		this.showNotice('Processing: ' + filePath);
-	  
+		
 		const fullFilePath = this.basePath + '/' + filePath;
 		const generatedBaseDir = fullFilePath.substring(0, fullFilePath.lastIndexOf('/'))
 		const fileDirName = generatedBaseDir + '/' + path.basename(filePath, path.extname(filePath));
@@ -388,7 +389,7 @@ class BasicSettingsTab extends PluginSettingTab {
 		
 		new Setting(containerEl)
 			.setName('Parent Relations')
-			.setDesc('Parent relations')
+			.setDesc('Comma-separated list of parent relations')
 			.addText(text => text
 				.setPlaceholder('has part')
 				.setValue(this.plugin.settings.parentRelations)
@@ -401,7 +402,7 @@ class BasicSettingsTab extends PluginSettingTab {
 			.setName('Child Relations')
 			.setDesc('Child relations')
 			.addText(text => text
-				.setPlaceholder('part of')
+				.setPlaceholder('part of, category')
 				.setValue(this.plugin.settings.childRelations)
 				.onChange(async (value) => {
 					this.plugin.settings.childRelations = value;

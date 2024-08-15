@@ -8,7 +8,6 @@ interface Arity1Predicates {
 type Arity2Predicate = [string, string, string];
 
 function createFoldersAndFiles(
-    arity1Predicates: Arity1Predicates,
     arity2Predicates: Arity2Predicate[],
     outputDir: string,
     parentRelations: string,
@@ -16,41 +15,108 @@ function createFoldersAndFiles(
 ): void {
     fs.mkdirSync(outputDir, { recursive: true });
 
-    for (const [predicate, parameters] of Object.entries(arity1Predicates)) {
-        const predicateDir = path.join(outputDir, predicate);
-        fs.mkdirSync(predicateDir, { recursive: true });
-        const predFilePath = path.join(predicateDir, `${predicate}.md`);
-        fs.appendFileSync(predFilePath, "%% Waypoint \n%% \n");
+    const parentRelationsArray = parentRelations.split(", ");
+    const childRelationsArray = childRelations.split(", ");
+    const parentRelationsArrayUnderscore = parentRelationsArray.map((relation) => relation.replace(/ /g, "_"));
+    const childRelationsArrayUnderscore = childRelationsArray.map((relation) => relation.replace(/ /g, "_"));
 
-        for (const parameter of parameters) {
-            const filePath = path.join(predicateDir, `${parameter}.md`);
-            fs.writeFileSync(filePath, `# ${parameter}\n\n`);
+    const parentChildMap = new Map<string, Set<string>>();
+    const processedChildren = new Set<string>();
+
+    for (const [predicate, param1, param2] of arity2Predicates) {
+        if (parentRelationsArrayUnderscore.includes(predicate)) {
+            if (!parentChildMap.has(param1)) {
+                parentChildMap.set(param1, new Set());
+            }
+            parentChildMap.get(param1)!.add(param2);
         }
     }
 
-    // Add arity 2 predicates as links
     for (const [predicate, param1, param2] of arity2Predicates) {
         let matchFound = false;
-        // Find which arity 1 predicate contains param1
-        for (const [arity1Pred, params] of Object.entries(arity1Predicates)) {
-            if (params.has(param1)) {
-                const paramFilePath = path.join(outputDir, arity1Pred, `${param1}.md`);
-                fs.appendFileSync(paramFilePath, `${predicate}::[[${param2}]]\n`);
-                matchFound = true;
-                break;
-            }
+        if (param1 === param2) {
+            console.log(`Skipping self-referential predicate: ${predicate}(${param1}, ${param2})`);
+            continue;
+        }
+
+        if (parentRelationsArrayUnderscore.includes(predicate)) {
+            matchFound = true;
+            processParentRelation(outputDir, predicate, param1, param2, parentChildMap, processedChildren);
         }
         
-        if (!matchFound) {
-            const uncategorizedDir = path.join(outputDir, "uncategorized");
-            console.log(`Warning: No matching arity 1 predicate found for ${param1} in ${predicate}(${param1}, ${param2}). Saving in ${uncategorizedDir}`);
-            fs.mkdirSync(uncategorizedDir, { recursive: true });
-            const paramFilePath = path.join(uncategorizedDir, `${param1}.md`);
-            fs.appendFileSync(paramFilePath, `${predicate}::[[${param2}]]\n`);
+        if (!matchFound && !processedChildren.has(param1) && !processedChildren.has(param2)) {
+            const param1FilePath = path.join(outputDir, `${param1}.md`);
+            if (!fs.existsSync(param1FilePath)) {
+                fs.appendFileSync(param1FilePath, `${predicate}::[[${param2}]]\n`);
+            }
+            const param2FilePath = path.join(outputDir, `${param2}.md`);
+            if (!fs.existsSync(param2FilePath)) {
+                fs.appendFileSync(param2FilePath, `${predicate}::[[${param1}]]\n`);
+            }
         }
     }
+}
 
-    console.log("Folders and files created successfully!");
+function processParentRelation(
+    outputDir: string, 
+    predicate: string, 
+    param1: string, 
+    param2: string, 
+    parentChildMap: Map<string, Set<string>>,
+    processedChildren: Set<string>
+) {
+    const createParentStructure = (currentDir: string, parent: string, child: string, dirPath: string[]) => {
+        const newPath = [...dirPath, parent];
+        const fullParentDir = path.join(currentDir, ...newPath);
+        
+        if (!fs.existsSync(fullParentDir)) {
+            fs.mkdirSync(fullParentDir, { recursive: true });
+        }
+        
+        const parentFilePath = path.join(fullParentDir, `${parent}.md`);
+        if (!fs.existsSync(parentFilePath)) {
+            fs.appendFileSync(parentFilePath, "%% Waypoint %% \n");
+        }
+        
+        if (parent !== child) {
+        const relationPredicate = `${predicate}::[[${child}]]\n`;
+        if (fs.existsSync(parentFilePath) && !fs.readFileSync(parentFilePath, 'utf-8').includes(relationPredicate)) {
+            fs.appendFileSync(parentFilePath, relationPredicate);
+        }
+        }
+        
+        if (!parentChildMap.has(child)) {
+            const childFilePath = path.join(fullParentDir, `${child}.md`);
+            if (!fs.existsSync(childFilePath)) {
+                fs.writeFileSync(childFilePath, "");
+            }
+        }
+    };
+
+    const processHierarchy = (node: string, currentPath: string[]) => {
+        if (processedChildren.has(node)) return;
+        processedChildren.add(node);
+
+        if (parentChildMap.has(node)) {
+            for (const child of parentChildMap.get(node)!) {
+                createParentStructure(outputDir, node, child, currentPath);
+                processHierarchy(child, [...currentPath, node]);
+            }
+        }
+    };
+
+    const findRoot = (node: string): string => {
+        for (const [parent, children] of parentChildMap.entries()) {
+            if (children.has(node)) {
+                return findRoot(parent);
+            }
+        }
+        return node;
+    };
+
+    const root = findRoot(param1);
+    createParentStructure(outputDir, root, root, []);
+    processHierarchy(root, []);
 }
 
 function parseProlog(filePath: string): [Arity1Predicates, Arity2Predicate[]] {
@@ -66,7 +132,6 @@ function parsePrologPredicates(content: string): [Arity1Predicates, Arity2Predic
     const arity1Predicates: Arity1Predicates = {};
     const arity2Predicates: Arity2Predicate[] = [];
 
-    // Parse arity 2 predicates
     const arity2Pattern = /(\w+)\((?:'([^']+)'|(\w+))\s*,\s*(?:'([^']+)'|(\w+))\)\./g;
     let match: RegExpExecArray | null;
     while ((match = arity2Pattern.exec(content)) !== null) {
@@ -76,7 +141,6 @@ function parsePrologPredicates(content: string): [Arity1Predicates, Arity2Predic
         arity2Predicates.push([predicate, param1, param2]);
     }
 
-    // Parse arity 1 predicates
     const arity1Pattern = /(\w+)\((?:'([^']+)'|(\w+))\)\./g;
     while ((match = arity1Pattern.exec(content)) !== null) {
         const [, predicate, quotedParam, unquotedParam] = match;
