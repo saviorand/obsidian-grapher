@@ -5,8 +5,8 @@ import { spawn } from 'child_process';
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import { LLMClient, callClaudeApi, callGptApi } from './src/llm';
 import { chunkText } from "src/chunking";
-import { defaultOntology, arityTwoPrompt } from './src/prompts';
-import { createFoldersAndFiles, parseProlog } from './src/prolog_to_folder';
+import { defaultOntology, arityTwoPrompt, titlePrompt } from './src/prompts';
+import { createFoldersAndFiles, parsePrologPredicates } from './src/prolog_to_folder';
 import { fileToText } from './src/file_to_text';
 import { ontologyContainerStyles } from './src/styles/styles';
 
@@ -14,6 +14,8 @@ enum llmEngine {
 	OPENAI = 'openai',
 	ANTHROPIC = 'anthropic'
 }
+
+type EngineHandler = () => Promise<string>;
 
 enum parserEngine {
 	DEFAULT = 'default',
@@ -133,136 +135,181 @@ export default class Grapher extends Plugin {
 		}
 	}
 
-	private createGeneratedFolders(generatedBasePath: string) {
-		const folderOutputPath = generatedBasePath;
-		const generatedDir = generatedBasePath + '/generated/';
-		fs.mkdirSync(generatedDir, { recursive: true });
-
-		return {folderOutputPath, generatedDir};
-	}
-
-	async textToProlog(text: string, prologOutputPath: string): Promise<void> {
+	async textToChunks(text: string): Promise<string[]> {
 		if (text.length === 0) {
 			this.showNotice('The text is empty');
 		}
-		const chunks = chunkText(text, this.settings.chunkSize);
-		return await this.textChunksToPrologRelations(chunks, prologOutputPath);
+		return chunkText(text, this.settings.chunkSize);
 	}
 
-	async prologToFolder(filePath: string, folderOutputPath: string) {	
-		const [arity1Predicates, arity2Predicates] = parseProlog(filePath);
-		createFoldersAndFiles(arity2Predicates, folderOutputPath, this.settings.parentRelations, this.settings.childRelations);
+	async chunksToGraph(chunks: string[], outputPath: string): Promise<void> {	
+		const llmClient = this.initializeLLMClient() as LLMClient;
+		const fileName = path.basename(outputPath, path.extname(outputPath));
+		const fullPrologOutputPath = path.join(outputPath, fileName + '.pl');		
+		
+		for (let i = 0; i < chunks.length; i++) {
+			this.showNotice(`Processing chunk ${i + 1} of ${chunks.length}`);
+			const chunk = chunks[i];
+
+			try {
+				const chunkTitle = await this.generateTitleFromText(llmClient, chunk);
+				if (chunkTitle === '') {
+					this.showNotice('Empty response from the LLM');
+				}
+
+				const chunkFolderName = chunkTitle.replace(/[^a-zA-Z0-9: ]/g, '_');
+				const chunkTextFileName = chunkTitle + '.txt';
+				const chunkPrologFileName = chunkTitle + '.pl';
+				const chunkMdFileName = chunkTitle + '.md';
+
+				const chunkOutputPath = path.join(outputPath, chunkFolderName);
+				fs.mkdirSync(chunkOutputPath, { recursive: true });
+
+				const chunkMdOutputPath = path.join(chunkOutputPath, chunkMdFileName);
+				fs.writeFileSync(chunkMdOutputPath, `\n%% Waypoint %%`);
+				
+				const chunkTextOutputPath = path.join(chunkOutputPath, chunkTextFileName);
+				fs.writeFileSync(chunkTextOutputPath, chunk);
+				this.showNotice(`Chunk saved to: ${chunkFolderName}`);
+				
+				const chunkPrologOutputPath = path.join(chunkOutputPath, chunkPrologFileName);
+				let chunkPrologRelations = await this.textToPrologRelations(llmClient, chunk);;
+				if (chunkPrologRelations === '') {
+					this.showNotice('Empty response from the LLM');
+				}
+				fs.appendFileSync(fullPrologOutputPath, chunkPrologRelations);
+				fs.appendFileSync(chunkPrologOutputPath, chunkPrologRelations);
+				this.showNotice('Prolog relations saved to: ' + chunkTextFileName);
+
+				const [arity1Predicates, arity2Predicates] = parsePrologPredicates(chunkPrologRelations);
+				createFoldersAndFiles(arity2Predicates, chunkOutputPath, this.settings.parentRelations, this.settings.childRelations);	
+				this.showNotice('Graph files saved to: ' + chunkFolderName);
+			} catch (error) {
+				this.showNotice('An error occurred during the text to Prolog conversion: ' + error);
+			}
+		}
+		return Promise.resolve();
 	}
 
-	cleanGPTPrologCodeBlocks(text: string) {
-		return text.replace(/```prolog/g, '').replace(/```/g, '');
+	cleanLLMPrologOutput(text: string) {
+		return text.replace(/```prolog/g, '').replace(/```/g, '').replace(/'/g, '');
 	};
 
-	async textChunksToPrologRelations(textChunks: string[], prologOutputPath: string) {
-		const llmClient = this.initializeLLMClient();
-
-		try {
-			for (let i = 0; i < textChunks.length; i++) {
-				this.showNotice(`Processing chunk ${i + 1} of ${textChunks.length}`);
-				const chunk = textChunks[i];
-				let chunkPrologRelations = null;
-				if (this.settings.llmEngine === llmEngine.OPENAI) {
-					try	{
-						chunkPrologRelations = await callGptApi(llmClient as OpenAI, this.settings.modelName, chunk, arityTwoPrompt(this.settings.ontology));
-						if (chunkPrologRelations === null || chunkPrologRelations === '') {
-							throw new Error('Empty response from OpenAI');
-						}
-						chunkPrologRelations = this.cleanGPTPrologCodeBlocks(chunkPrologRelations);
-					} catch (error) {
-						this.showNotice('An error occurred during entity extraction: ' + error);
-					}
-				} else if (this.settings.llmEngine === llmEngine.ANTHROPIC) {
-					try {
-						chunkPrologRelations = await callClaudeApi(this.settings.anthropicKey, this.settings.modelName, chunk, arityTwoPrompt(this.settings.ontology));
-						if (chunkPrologRelations === null || chunkPrologRelations === '') {
-							throw new Error('Empty response from Anthropic');
-						}
-					  } catch (error) {
-						console.error('An error occurred during entity extraction:', error);
-						this.showNotice('An error occurred during entity extraction: ' + error);
-						fs.appendFileSync(prologOutputPath, `Error: ${error}\n`);
-					  }
-					}
-				if (chunkPrologRelations) {
-				fs.appendFileSync(prologOutputPath, chunkPrologRelations);
-				}
+	async textToPrologRelations(client: LLMClient, text: string): Promise<string> {
+		const { llmEngine, modelName, ontology, anthropicKey } = this.settings;
+	  
+		const engineHandlers: { [K in llmEngine]: EngineHandler } = {
+			'openai': async () => {
+			  const raw_relations = await callGptApi(client as OpenAI, modelName, text, arityTwoPrompt(ontology));
+			  if (!raw_relations) {
+				throw new Error(`Empty response from ${llmEngine}`);
+			  }
+			  return this.cleanLLMPrologOutput(raw_relations);
+			},
+			'anthropic': async () => {
+			  const raw_relations = await callClaudeApi(anthropicKey, modelName, text, arityTwoPrompt(ontology));
+			  if (!raw_relations) {
+				throw new Error(`Empty response from ${llmEngine}`);
+			  }
+			  return this.cleanLLMPrologOutput(raw_relations);
 			}
-		} catch (error) {
-			this.showNotice('An error occurred during entity extraction: ' + error);
+		  };
+	  
+		  const handler = engineHandlers[llmEngine];
+		  if (!handler) {
+			throw new Error(`Unsupported LLM engine: ${llmEngine}`);
+		  }
+	  
+		  const result = await handler();
+		  if (!result) {
+			throw new Error(`Empty response from ${llmEngine}`);
+		  }
+	  
+		  return result;
+	}
+
+	async generateTitleFromText(client: LLMClient, text: string): Promise<string> {
+		const { llmEngine, modelName, anthropicKey } = this.settings;
+
+		const engineHandlers: { [K in llmEngine]: EngineHandler } = {
+			'openai': async () => {
+				const gptResponse = await callGptApi(client as OpenAI, modelName, text, titlePrompt);
+				if (!gptResponse) {
+					throw new Error(`Empty response from ${llmEngine}`);
+				}
+				return gptResponse;
+			},
+			'anthropic': async () => {
+				return await callClaudeApi(anthropicKey, modelName, text, titlePrompt);
+			}
+		};
+
+		const handler = engineHandlers[llmEngine];
+		if (!handler) {
+			throw new Error(`Unsupported LLM engine: ${llmEngine}`);
 		}
+
+		const result = await handler();
+		if (!result) {
+			throw new Error(`Empty response from ${llmEngine}`);
+		}
+
+		return result;
 	}
 
 	async generateGraphFromText(text: string, filePath: string) {
 		this.showNotice('Processing your text...');
 
 		const fullFilePath = this.basePath + '/' + filePath;
-		const generatedBaseDir = fullFilePath.substring(0, fullFilePath.lastIndexOf('/'))
-		
-		const clippingName = text.substring(0, 50).replace(/[^a-zA-Z0-9]/g, '_');
-		const clippingDirName = generatedBaseDir + '/' + clippingName
-		
-		const {folderOutputPath, generatedDir} = this.createGeneratedFolders(clippingDirName);
-		
-		const prologOutputPath = path.join(generatedDir, 'content.pl');
-		const textOutputPath = path.join(generatedDir, 'content.txt');
-		fs.writeFileSync(textOutputPath, text);
-		
-		this.showNotice(`File written successfully to: ${textOutputPath}`);
+		const generatedBaseDir = fullFilePath.substring(0, fullFilePath.lastIndexOf('.'));
+		fs.mkdirSync(generatedBaseDir, { recursive: true });
 
-		try {
-			if (prologOutputPath) {
-			  await this.textToProlog(text, prologOutputPath);
-			  this.showNotice('Text to Prolog conversion completed');
-			}
-			if (prologOutputPath && folderOutputPath) {
-			  await this.prologToFolder(prologOutputPath, folderOutputPath);
-			  this.showNotice('Prolog to Folder conversion completed');
-			}
-			this.showNotice('Your graph is ready!');
-		  } catch (error) {
+		if (generatedBaseDir) {
+			const fileName = path.basename(fullFilePath, path.extname(fullFilePath));
+			const textOutputPath = path.join(generatedBaseDir, fileName + '.txt');
+			fs.writeFileSync(textOutputPath, text);
+			
+			try {
+			  await this.chunksToGraph([text], generatedBaseDir);
+			  this.showNotice('Your graph is ready!');
+			} catch (error) {
 			this.showNotice('An error occurred during the graph generation: ' + error);
-		  }	  
+		  }	 
+		} 
 	}
 
 	async generateGraphFromFile(filePath: string) {
 		this.showNotice('Processing: ' + filePath);
 		
 		const fullFilePath = this.basePath + '/' + filePath;
-		const generatedBaseDir = fullFilePath.substring(0, fullFilePath.lastIndexOf('/'))
-		const fileDirName = generatedBaseDir + '/' + path.basename(filePath, path.extname(filePath));
-		
-		const {folderOutputPath, generatedDir} = this.createGeneratedFolders(fileDirName);
-		
-		const prologOutputPath = path.join(generatedDir, 'content.pl');
-		const textOutputPath = path.join(generatedDir, 'content.txt');
-	  
-		try {
-		  if (textOutputPath) {
-			if (this.settings.parserEngine === parserEngine.DEFAULT) {
-			  const text = await fileToText(fullFilePath);
-			  fs.writeFileSync(textOutputPath, text);
-			} else if (this.settings.parserEngine === parserEngine.UNSTRUCTURED) {
-			  await this.spawnPythonProcessAsync(this.pythonScriptFileToTextPath, fullFilePath, textOutputPath);
-			}	
-			this.showNotice('File to Text conversion completed');
-		  }
-		  if (prologOutputPath) {
-			const textContent = fs.readFileSync(textOutputPath, 'utf8')
-			await this.textToProlog(textContent, prologOutputPath);
-			this.showNotice('Text to Prolog conversion completed');
-		  }
-		  if (folderOutputPath) {
-			await this.prologToFolder(prologOutputPath, folderOutputPath);
-			this.showNotice('Prolog to Folder conversion completed');
-		  }
-		  this.showNotice('Your graph is ready!');
-		} catch (error) {
-		  this.showNotice('An error occurred during the graph generation: ' + error);
+		const fileName = path.basename(fullFilePath, path.extname(fullFilePath));
+		const generatedBaseDir = fullFilePath.substring(0, fullFilePath.lastIndexOf('.'))
+		const textOutputPath = path.join(generatedBaseDir, fileName + '.txt');
+		const chunkMdFileName = fileName + '.md';
+
+		if (generatedBaseDir) {
+			try {
+				let textContent = '';
+				if (this.settings.parserEngine === parserEngine.DEFAULT) {
+					textContent = await fileToText(fullFilePath);
+					fs.writeFileSync(textOutputPath, textContent);
+				} else if (this.settings.parserEngine === parserEngine.UNSTRUCTURED) {
+					await this.spawnPythonProcessAsync(this.pythonScriptFileToTextPath, fullFilePath, textOutputPath);
+					textContent = fs.readFileSync(textOutputPath, 'utf8')
+				}	
+				this.showNotice('File to Text conversion completed');
+				
+				const chunks = await this.textToChunks(textContent);
+				this.showNotice('Text to Chunks conversion completed');
+				
+				const chunkMdOutputPath = path.join(generatedBaseDir, chunkMdFileName);
+				fs.writeFileSync(chunkMdOutputPath, `\n%% Waypoint %%`);
+
+				await this.chunksToGraph(chunks, generatedBaseDir);
+				this.showNotice('Your graph is ready!');
+			} catch (error) {
+				this.showNotice('An error occurred during graph generation: ' + error);
+			}
 		}
 	  }
 	  

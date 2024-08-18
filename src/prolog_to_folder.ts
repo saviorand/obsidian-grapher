@@ -119,15 +119,6 @@ function processParentRelation(
     processHierarchy(root, []);
 }
 
-function parseProlog(filePath: string): [Arity1Predicates, Arity2Predicate[]] {
-    const content = readFile(filePath);
-    return parsePrologPredicates(content);
-}
-
-function readFile(filePath: string): string {
-    return fs.readFileSync(filePath, 'utf-8');
-}
-
 function parsePrologPredicates(content: string): [Arity1Predicates, Arity2Predicate[]] {
     const arity1Predicates: Arity1Predicates = {};
     const arity2Predicates: Arity2Predicate[] = [];
@@ -154,4 +145,4 @@ function parsePrologPredicates(content: string): [Arity1Predicates, Arity2Predic
     return [arity1Predicates, arity2Predicates];
 }
 
-export { createFoldersAndFiles, parseProlog };
+export { createFoldersAndFiles, parsePrologPredicates };

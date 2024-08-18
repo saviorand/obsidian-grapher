@@ -1,9 +1,20 @@
-const defaultOntology = `Classes:
-     Abstract Action Amount of substrate Awareness level Biological level Category Change Chemical level Chronoid Concept Concrete Configuration Configuroid Continuous Continuous change Continuous process Dependent Discrete Discrete presential Discrete process Entity Extrinsic change Function History Independent Individual Instantanuous change Intrinsic change Item Level Line Mass entity Material boundary Material line Material object Material persistant Material point Material stratum Material structure Material surface Mental stratum Occurrent Ontological layer Persistant Personality level Physical level Point Presential Process Processual role Property Property value Relational role Relator Role Set Situation Situoid Social role Social stratum Space Space time Spatial boundary Spatial region State Stratum Surface Symbol Symbol sequence Symbol structure Temporal region Time Time boundary Token Topoid Universal Value space 
+const defaultOntologyFull = `Classes:
+     abstract concrete action category change chronoid continuous continuous_change continuous_process dependent discrete discrete_presential discrete_process extrinsic change function history independent individual instantanuous_change intrinsic_change item level line mass entity material_boundary material_object material_persistant material_point material_structure material_surface occurrent persistant point presential process processual_role property property_value role set situation situoid social_role social_stratum space spatial_boundary spatial_region state stratum surface symbol symbol_sequence symbol_structure temporal_region time time_boundary token topoid universal value_space 
 
     Object Properties:
-        abstract has part abstract part of agent in boundary of categorial part of category in layer caused by causes constituent part of depends on exists at framed by frames function determinant of functional item of goal of has boundary has categorial part has category has constituent part has function has function determinant has functional item has goal has left time boundary has member has part has participant has proper part has requirement has right time boundary has sequence constituent has spatial boundary has time boundary has token has value instance of instantiated by layer of left boundary of level of member of necessary for occupied by occupies on layer on level on stratum part of participates in plays role projection of projects to proper part of realized by realizes requirement of right boundary of role of sequence constituent of spatial boundary of stratum of time boundary of value of 
+        agent_in boundary_of caused_by causes depends_on exists_at framed_by frames goal_of has_boundary has_category has_function has_goal has_left_time_boundary has_member has_part has_participant has_requirement has_right_time_boundary has_sequence_constituent has_spatial_boundary has_time_boundary has_token has_value instance_of instantiated_by layer_of left_boundary_of level_of member_of necessary_for occupied_by occupies on_layer on_level on_stratum part_of participates_in plays_role projection_of projects_to realized_by realizes requirement_of right_boundary_of role_of spatial_boundary_of stratum_of time_boundary_of value_of 
     `
+
+const defaultOntology = `Classes:
+     abstract concrete action category change chronoid continuous continuous_change continuous_process dependent discrete discrete_presential discrete_process extrinsic change function history independent individual instantanuous_change intrinsic_change item level line mass entity material_boundary material_object material_persistant material_point material_structure material_surface occurrent persistant point presential process processual_role property property_value role set situation situoid social_role social_stratum space spatial_boundary spatial_region state stratum surface symbol symbol_sequence symbol_structure temporal_region time time_boundary token topoid universal value_space 
+
+    Object Properties:
+        agent_in boundary_of caused_by causes depends_on exists_at framed_by frames goal_of has_boundary has_function has_goal has_left_time_boundary has_member has_part has_participant has_requirement has_right_time_boundary has_spatial_boundary has_time_boundary has_token has_value instantiated_by layer_of left_boundary_of level_of necessary_for occupied_by occupies on_layer on_level on_stratum participates_in plays_role projection_of projects_to realized_by realizes requirement_of right_boundary_of role_of spatial_boundary_of stratum_of time_boundary_of value_of 
+    `
+
+const defaultParentRelations = "has_part instantiated_by realized_by role_of spatial_boundary_of stratum_of time_boundary_of has_value"
+
+const titlePrompt = "Generate a title for the given text. The title should be 2-6 words that capture the essence of the text. Please respond with the title only. Text:"
 
 function correctnessCheckPrompt(domain_subjects: string, ontology: string){
     return `You are a domain expert in the field of ${domain_subjects}.
@@ -34,4 +45,4 @@ function arityTwoPrompt(ontology: string){
     `
 }
 
-export {defaultOntology, correctnessCheckPrompt, arityTwoPrompt}
+export {defaultOntology, correctnessCheckPrompt, arityTwoPrompt, titlePrompt}
