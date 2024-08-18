@@ -106,6 +106,8 @@ export default class Grapher extends Plugin {
 		})		
 	}
 
+	private sanitizeTitle = (title: string) => title.replace(/[^a-zA-Z0-9 ]/g, '_');
+
 	private checkAPIKeys() {
 		if (this.settings.llmEngine === llmEngine.OPENAI && this.settings.openAiKey === '') {
 			this.showNotice('Please enter your OpenAI API key in the settings.');
@@ -156,11 +158,12 @@ export default class Grapher extends Plugin {
 				if (chunkTitle === '') {
 					this.showNotice('Empty response from the LLM');
 				}
+				
+				const chunkFolderName = this.sanitizeTitle(chunkTitle);
+				const chunkTextFileName = this.sanitizeTitle(chunkTitle) + '.txt';
+				const chunkPrologFileName = this.sanitizeTitle(chunkTitle) + '.pl';
+				const chunkMdFileName = this.sanitizeTitle(chunkTitle) + '.md';
 
-				const chunkFolderName = chunkTitle.replace(/[^a-zA-Z0-9: ]/g, '_');
-				const chunkTextFileName = chunkTitle + '.txt';
-				const chunkPrologFileName = chunkTitle + '.pl';
-				const chunkMdFileName = chunkTitle + '.md';
 
 				const chunkOutputPath = path.join(outputPath, chunkFolderName);
 				fs.mkdirSync(chunkOutputPath, { recursive: true });
